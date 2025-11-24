@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Theology Chatbot</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+            height: 100vh;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #chat-container {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            padding: 1rem;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+        .message {
+            margin-bottom: 0.75rem;
+            max-width: 85%;
+            padding: 0.75rem 1rem;
+            border-radius: 1.5rem;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+        .user {
+            align-self: flex-end;
+            background-color: #2563EB; /* Blue for user */
+            color: white;
+            border-bottom-right-radius: 0.25rem;
+        }
+        .bot {
+            align-self: flex-start;
+            background-color: #FFFFFF; /* White for bot */
+            color: #1F2937;
+            border: 1px solid #E5E7EB;
+            border-bottom-left-radius: 0.25rem;
+        }
+        /* Styling for the loading indicator */
+        .loading-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #4B5563;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 2px;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .loading-dot:nth-child(1) { animation-delay: -0.32s; }
+        .loading-dot:nth-child(2) { animation-delay: -0.16s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
+        .disclaimer-box {
+            background-color: #FEF3C7;
+            border-left: 4px solid #FBBF24;
+            color: #92400E;
+            padding: 0.75rem;
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="disclaimer-box">
+        <p><strong>Important Disclaimer:</strong> This is an AI tool and is not a substitute for counsel from religious leaders or theological study. Always verify key doctrinal points with trusted religious texts or sources.</p>
+    </div>
+    <header class="bg-white shadow-md p-4 sticky top-0 z-10">
+        <h1 class="text-xl font-bold text-center text-gray-800">Christian Wisdom Chatbot</h1>
+    </header>
+    <main id="chat-container" class="flex-1 overflow-y-auto">
+        <!-- Chat messages will be appended here -->
+    </main>
+    <div id="input-area" class="p-4 bg-white border-t border-gray-200 sticky bottom-0 z-10">
+        <form id="chat-form" class="flex gap-2">
+            <input type="text" id="user-input" placeholder="Ask a question about the Bible, theology, or faith..."
+                   class="flex-1 p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-150"
+                   required>
+            <button type="submit" id="send-button" disabled
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded-xl shadow-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                Send
+            </button>
+        </form>
+    </div>
+    <script>
+        // --- Firebase/Canvas Setup ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const apiKey = ""; // API key is provided by the Canvas environment for the fetch call
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        // --- Core Application State & Constants ---
+        const chatContainer = document.getElementById('chat-container');
+        const chatForm = document.getElementById('chat-form');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+        let chatHistory = [];
+        let isProcessing = false;
+        // The critical instruction that defines the chatbot's identity and constraints
+        const systemPrompt = `You are a knowledgeable, non-denominational Christian theologian and helpful guide named 'Theology Bot'.
+        Your primary source of knowledge is the Bible and traditional Christian doctrine.
+       
+        RULES:
+        1. Always maintain a warm, encouraging, and supportive tone.
+        2. Keep answers concise, accurate, and focus on providing guidance or context based on common Christian understanding.
+        3. When referencing Scripture, quote or paraphrase clearly, but do not provide specific verse citations unless they are extremely well-known (e.g., John 3:16).
+        4. If a question involves sensitive, specific denominational doctrine, politely state that you focus on universally accepted core Christian beliefs and encourage consulting a local church leader.
+        5. DO NOT promote hatred, violence, or discrimination against any group or religion. Maintain absolute respect for all people and beliefs.
+        6. If asked for medical, legal, or financial advice, decline politely and state you are an AI focused on faith/theology only.`;
+       
+        // --- Utility Functions ---
+        // Simple utility to show a loading state
+        function showLoadingIndicator() {
+            const loadingHtml = `
+                <div id="loading-message" class="message bot">
+                    <div class="loading-dot"></div>
+                    <div class="loading-dot"></div>
+                    <div class="loading-dot"></div>
+                </div>
+            `;
+            chatContainer.insertAdjacentHTML('beforeend', loadingHtml);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+        function hideLoadingIndicator() {
+            const loadingMessage = document.getElementById('loading-message');
+            if (loadingMessage) {
+                loadingMessage.remove();
+            }
+        }
+        function displayMessage(role, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', role);
+           
+            // Convert markdown text to HTML for better display
+            const formattedText = text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')     // Italic
+                .replace(/^- (.*)/gm, '<li>$1</li>');     // Simple list handling
+            if (formattedText.includes('<li>')) {
+                messageDiv.innerHTML = formattedText.replace(/<li>.*<\/li>/s, (match) => `<ul>${match}</ul>`);
+            } else {
+                 messageDiv.innerHTML = formattedText;
+            }
+           
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+       
+        // --- Gemini API Handler with Exponential Backoff ---
+        async function getGeminiResponse(userQuery) {
+            if (isProcessing) return;
+            isProcessing = true;
+            sendButton.disabled = true;
+            userInput.disabled = true;
+           
+            // Add user query to history
+            chatHistory.push({ role: "user", parts: [{ text: userQuery }] });
+            // Show loading state
+            showLoadingIndicator();
+            const payload = {
+                contents: chatHistory,
+                // System instructions define the personality and rules
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+                // Use Google Search for grounding to ensure modern context/accuracy
+                tools: [{ "google_search": {} }],
+            };
+            const maxRetries = 3;
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!response.ok) {
+                        if (response.status === 429 && i < maxRetries - 1) {
+                            // Rate limit hit, wait with exponential backoff
+                            const delay = Math.pow(2, i) * 1000;
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                            continue; // Retry
+                        }
+                        throw new Error(`API Request failed with status: ${response.status}`);
+                    }
+                    const result = await response.json();
+                    const candidate = result.candidates?.[0];
+                    if (candidate && candidate.content?.parts?.[0]?.text) {
+                        let text = candidate.content.parts[0].text;
+                       
+                        // Check for grounding sources
+                        const groundingMetadata = candidate.groundingMetadata;
+                        if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                            const sources = groundingMetadata.groundingAttributions
+                                .map(attribution =>
+                                    attribution.web?.uri && attribution.web?.title
+                                        ? `<a href="${attribution.web.uri}" target="_blank" class="text-blue-500 hover:underline">${attribution.web.title}</a>`
+                                        : null
+                                )
+                                .filter(s => s !== null);
+                            if (sources.length > 0) {
+                                // Add a note about grounding/sources at the end of the response
+                                text += `\n\n<p class="text-xs text-gray-500 mt-2">Grounded by sources: ${sources.slice(0, 3).join(', ')}</p>`;
+                            }
+                        }
+                        // Add bot response to history and display
+                        chatHistory.push({ role: "model", parts: [{ text: text.replace(/<[^>]*>?/gm, '') }] }); // Save clean text to history
+                        hideLoadingIndicator();
+                        displayMessage('bot', text);
+                        break; // Success, exit retry loop
+                    } else {
+                        throw new Error("Received empty or malformed response from the model.");
+                    }
+                } catch (error) {
+                    console.error("Gemini API error:", error);
+                    hideLoadingIndicator();
+                    displayMessage('bot', "I encountered an error trying to process that request. Please try again.");
+                    break; // Error after all retries or non-retryable error
+                }
+            }
+           
+            isProcessing = false;
+            sendButton.disabled = false;
+            userInput.disabled = false;
+            userInput.focus();
+        }
+        // --- Event Listener ---
+        chatForm.addEventListener('submit', function(event) {
+            event.preventDefault();
+            const query = userInput.value.trim();
+            if (query && !isProcessing) {
+                displayMessage('user', query);
+                getGeminiResponse(query);
+                userInput.value = ''; // Clear input field
+            }
+        });
+        // Enable button when input is detected
+        userInput.addEventListener('input', () => {
+             sendButton.disabled = userInput.value.trim() === '' || isProcessing;
+        });
+        // Initial welcome message
+        document.addEventListener('DOMContentLoaded', () => {
+            displayMessage('bot', "Hello! I am your Christian Wisdom Chatbot. I'm here to offer guidance, context, and information on faith, theology, and scripture. How may I help you today?");
+            sendButton.disabled = true; // Initially disable until user types
+        });
+    </script>
+</body>
+</html>
