@@ -10,7 +10,7 @@ import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 // -- Environment / Canvas-provided variables (if available) --
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 const API_KEY = typeof __api_key !== 'undefined' ? __api_key : ''; // Canvas may inject this at runtime
 
@@ -39,12 +39,9 @@ const escapeHtml = (unsafe) =>
 // Render simple inline formatting: **bold**
 const renderInlineNodes = (text, keyPrefix = '') => {
   if (!text) return null;
-  // escape first
   const escaped = escapeHtml(text);
-  // split by **...**
   const parts = escaped.split(/\*\*(.*?)\*\*/g); // keeps capture groups
   return parts.map((part, idx) => {
-    // parts in odd indexes are bold content
     if (idx % 2 === 1) {
       return (
         <strong key={`${keyPrefix}-b-${idx}`} className="font-semibold">
@@ -117,6 +114,7 @@ export default function App() {
   const [auth, setAuth] = useState(null);
   const [userId, setUserId] = useState(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [firebaseError, setFirebaseError] = useState(null);
 
   // App State
   const [chatHistory, setChatHistory] = useState([]);
@@ -127,6 +125,10 @@ export default function App() {
 
   // -- Firebase Initialization and Authentication --
   useEffect(() => {
+    if (!firebaseConfig) {
+      setFirebaseError('Missing or invalid Firebase configuration.');
+      return;
+    }
     try {
       const app = initializeApp(firebaseConfig);
       const firestore = getFirestore(app);
@@ -165,6 +167,7 @@ export default function App() {
 
       return () => unsubscribe();
     } catch (e) {
+      setFirebaseError('Firebase setup failed: ' + e.message);
       console.error('Firebase setup failed:', e);
     }
   }, []);
@@ -175,7 +178,7 @@ export default function App() {
 
     setIsDbLoading(true);
 
-    // Build doc reference with path segments rather than a single slash-leading string
+    // Build doc reference with path segments
     const userDocRef = doc(
       db,
       'artifacts',
@@ -285,8 +288,7 @@ export default function App() {
       console.error('Failed to persist optimistic user message:', e)
     );
 
-    // Prepare conversation for API. Transform to a minimal expected shape.
-    // (Check and adapt to the actual API schema you will use.)
+    // Prepare conversation for API.
     const historyForApi = updatedHistory.map(({ role, text }) => ({
       role: role === 'model' ? 'model' : 'user',
       parts: [{ text }]
@@ -297,7 +299,6 @@ export default function App() {
       systemInstruction: {
         parts: [{ text: SYSTEM_PROMPT }]
       },
-      // tools field left minimal; adapt according to API docs if you use external tools
       tools: [{ google_search: {} }]
     };
 
@@ -312,7 +313,6 @@ export default function App() {
         });
 
         if (!response.ok) {
-          // handle rate limiting with backoff
           if (response.status === 429 && attempt < maxRetries - 1) {
             const delay = Math.pow(2, attempt) * 1000;
             await new Promise((resolve) => setTimeout(resolve, delay));
@@ -340,7 +340,6 @@ export default function App() {
         }
 
         // If the API returns grounding metadata with attributions, append as plain text
-        // (Avoid inserting raw HTML from the model to prevent XSS.)
         const grounding = candidate?.groundingMetadata || result?.groundingMetadata;
         if (grounding?.groundingAttributions && grounding.groundingAttributions.length > 0) {
           const sources = grounding.groundingAttributions
@@ -400,12 +399,26 @@ export default function App() {
   };
 
   // -- Loading and Auth States --
+  if (firebaseError) {
+    return (
+      <div className="flex justify-center items-center h-screen bg-gray-50">
+        <div className="text-center p-8">
+          <p className="text-red-600 font-semibold text-lg mb-2">Error initializing app:</p>
+          <p className="text-gray-700">{firebaseError}</p>
+          <p className="mt-2 text-sm text-gray-400">
+            Please check your Firebase configuration and environment variables.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!isAuthReady) {
     return (
       <div className="flex justify-center items-center h-screen bg-gray-50">
-        <p className="text-gray-600 font-semibold">
+        <p className="text-gray-600 font-semibold flex flex-col items-center">
           <svg
-            className="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-500 inline-block"
+            className="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-500 mb-2"
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
             viewBox="0 0 24 24"
@@ -453,7 +466,7 @@ export default function App() {
           </div>
         ) : (
           chatHistory.map((msg, index) => (
-            <div key={msg.timestamp || index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div key={`${msg.timestamp || ''}-${index}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div
                 className={`message max-w-[85%] p-3 rounded-xl shadow-md ${
                   msg.role === 'user'
@@ -471,9 +484,9 @@ export default function App() {
         {isProcessing && (
           <div className="flex justify-start">
             <div className="message bg-white text-gray-600 p-3 rounded-xl shadow-md rounded-tl-sm">
-              <div className="loading-dot bg-gray-400 h-2 w-2 rounded-full inline-block mx-0.5 animate-bounce" style={{ animationDelay: '0s' }} />
-              <div className="loading-dot bg-gray-400 h-2 w-2 rounded-full inline-block mx-0.5 animate-bounce" style={{ animationDelay: '0.1s' }} />
-              <div className="loading-dot bg-gray-400 h-2 w-2 rounded-full inline-block mx-0.5 animate-bounce" style={{ animationDelay: '0.2s' }} />
+              <span className="loading-dot bg-gray-400 h-2 w-2 rounded-full inline-block mx-0.5 animate-bounce" style={{ animationDelay: '0s' }} />
+              <span className="loading-dot bg-gray-400 h-2 w-2 rounded-full inline-block mx-0.5 animate-bounce" style={{ animationDelay: '0.1s' }} />
+              <span className="loading-dot bg-gray-400 h-2 w-2 rounded-full inline-block mx-0.5 animate-bounce" style={{ animationDelay: '0.2s' }} />
             </div>
           </div>
         )}
